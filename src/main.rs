@@ -1,20 +1,17 @@
-use bevy::{prelude::*, render::camera::ScalingMode, tasks::IoTaskPool};
-use bevy_ggrs::*;
+use bevy::{prelude::*, render::camera::ScalingMode};
+use bevy_ggrs::{ggrs::PlayerType, *};
 use bevy_matchbox::prelude::*;
-use bevy_matchbox::matchbox_socket::{WebRtcSocket, PeerId};
+use bevy_matchbox::matchbox_socket::PeerId;
+use input::*;
+use components::*;
+
+mod input;
+mod components;
 
 const MOVE_SPEED: f32 = 0.13;
 
-const INPUT_UP: u8 = 1 << 0;
-const INPUT_DOWN: u8 = 1 << 1;
-const INPUT_RIGHT: u8 = 1 << 2;
-const INPUT_LEFT: u8 = 1 << 3;
-const INPUT_FIRE: u8 = 1 << 4;
-
-#[derive(Component)]
-struct Player {
-    handle: usize
-}
+#[derive(Resource)]
+struct LocalPlayerHandle(usize);
 
 struct GgrsConfig;
 
@@ -38,7 +35,7 @@ fn main() {
         .register_rollback_component::<Transform>(),)
     .insert_resource(ClearColor(Color::rgb(0.53, 0.53, 0.53)))
     .add_systems(Startup, (setup, spawn_players, start_matchbox_socket))
-    .add_systems(Update,  wait_for_players)
+    .add_systems(Update,  (wait_for_players, camera_follow))
     .add_systems(GgrsSchedule, move_player)
     .run();
 }
@@ -131,6 +128,10 @@ fn wait_for_players(mut commands: Commands, mut socket: ResMut<MatchboxSocket<Si
         .with_input_delay(1);
 
     for (i, player) in players.into_iter().enumerate() {
+        if player == PlayerType::Local {
+            commands.insert_resource(LocalPlayerHandle(i));
+        }
+
         session_builder = session_builder.add_player(player, i)
             .expect("Failed to add player");
     }
@@ -143,22 +144,26 @@ fn wait_for_players(mut commands: Commands, mut socket: ResMut<MatchboxSocket<Si
     commands.insert_resource(bevy_ggrs::Session::P2P(ggrs_session));
 }
 
-fn input(_: In<ggrs::PlayerHandle>, keys: Res<Input<KeyCode>>) -> u8 {
+fn camera_follow(
+    player_handle: Option<Res<LocalPlayerHandle>>,
+    players: Query<(&Player, &Transform)>,
+    mut cameras: Query<&mut Transform, (With<Camera>, Without<Player>)>,
+) {
+    let player_handle = match player_handle {
+        Some(handle) => handle.0,
+        None => return,
+    };
 
-    let mut input: u8 = 0;
+    for (player, player_transform) in &players {
+        if player.handle != player_handle {
+            continue;
+        }
 
-    if keys.any_pressed([KeyCode::Up, KeyCode::W]) {
-        input |= INPUT_UP;
-    }
-    if keys.any_pressed([KeyCode::Up, KeyCode::S]) {
-        input |= INPUT_DOWN;
-    }
-    if keys.any_pressed([KeyCode::Up, KeyCode::D]) {
-        input |= INPUT_RIGHT;
-    }
-    if keys.any_pressed([KeyCode::Up, KeyCode::A]) {
-        input |= INPUT_LEFT;
-    }
+        let pos = player_transform.translation;
 
-    return input;
+        for mut transform in &mut cameras {
+            transform.translation.x = pos.x;
+            transform.translation.y = pos.y;
+        }
+    }
 }

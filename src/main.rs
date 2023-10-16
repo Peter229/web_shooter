@@ -1,23 +1,24 @@
-use bevy::{prelude::*, render::camera::ScalingMode, math::Vec3Swizzles};
+use bevy::{prelude::*, render::camera::ScalingMode};
 use bevy_ggrs::{ggrs::PlayerType, *};
 use bevy_matchbox::prelude::*;
-use bevy_matchbox::matchbox_socket::PeerId;
 use bevy_asset_loader::prelude::*;
+use bevy_egui::{egui::{self, Align2, Color32, FontId, RichText}, EguiContexts, EguiPlugin};
 use input::*;
 use components::*;
+use rollback_functions::*;
+use resources::*;
 
 mod input;
 mod components;
+mod rollback_functions;
+mod resources;
 
 //Use matchbox_server in cmd window then keep open while working. Just keeps server up
 //Recompile with cargo run --release --target wasm32-unknown-unknown
 //Testing url http://127.0.0.1:1334
 
-const MOVE_SPEED: f32 = 0.13;
 const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
-const PLAYER_RADIUS: f32 = 0.5;
-const BULLET_RADIUS: f32 = 0.025;
 
 #[derive(States, Clone, Eq, PartialEq, Debug, Hash, Default)]
 enum GameState{
@@ -27,45 +28,35 @@ enum GameState{
     InGame,
 }
 
-#[derive(AssetCollection, Resource)]
-struct ImageAssets {
-    #[asset(path = "bullet.png")]
-    bullet: Handle<Image>,
-}
-
-#[derive(Resource)]
-struct LocalPlayerHandle(usize);
-
-struct GgrsConfig;
-
-impl ggrs::Config for GgrsConfig {
-    type Input = u8;
-    type State = u8;
-    type Address = PeerId;
-}
-
 fn main() {
     App::new().add_state::<GameState>()
     .add_loading_state(LoadingState::new(GameState::AssetLoading).continue_to_state(GameState::Matchmaking))
     .add_collection_to_loading_state::<_, ImageAssets>(GameState::AssetLoading)
-    .add_plugins(DefaultPlugins.set(WindowPlugin {
+    .add_plugins((DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             fit_canvas_to_parent: true,
             prevent_default_event_handling: false,
             ..default()
         }),
         ..default()
-    }))
+        }),
+        EguiPlugin,
+    ))
     .add_ggrs_plugin(GgrsPlugin::<GgrsConfig>::new()
         .with_input_system(input)
         .register_rollback_component::<Transform>()
         .register_rollback_component::<BulletReady>()
-        .register_rollback_component::<MoveDir>(),
+        .register_rollback_component::<MoveDir>()
+        .register_rollback_resource::<Scores>()
+        .register_rollback_resource::<RollbackState>(),
     )
+    .init_resource::<Scores>()
+    .init_resource::<RollbackState>()
     .insert_resource(ClearColor(Color::rgb(0.53, 0.53, 0.53)))
     .add_systems(OnEnter(GameState::Matchmaking), (setup, start_matchbox_socket))
     .add_systems(OnEnter(GameState::InGame), spawn_players)
-    .add_systems(Update,  (wait_for_players.run_if(in_state(GameState::Matchmaking)), camera_follow.run_if(in_state(GameState::InGame)),),)
+    .add_systems(Update,  (wait_for_players.run_if(in_state(GameState::Matchmaking)), 
+        (camera_follow, update_score_ui).run_if(in_state(GameState::InGame)),),)
     .add_systems(GgrsSchedule, (move_player, reload_bullet, fire_bullets, move_bullet, kill_players).chain())
     .run();
 }
@@ -73,6 +64,7 @@ fn main() {
 //Using .chain() forces one to run after another, using .after() allows for parallel exucation as long as the same components are not effected in each function
 //Web does not allow for parallel execution so .chain() is fine
 
+//All functions below runs once when we start matching making
 fn setup(mut commands: Commands) {
     let mut camera_bundle = Camera2dBundle::default();
     camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.0);
@@ -111,6 +103,13 @@ fn setup(mut commands: Commands) {
     }
 }
 
+fn start_matchbox_socket(mut commands: Commands) {
+    let room_url = "ws://127.0.0.1:3536/web_shooter?next=2";
+    info!("Connecting to matchbox server: {room_url}");
+    commands.insert_resource(MatchboxSocket::new_ggrs(room_url));
+}
+
+//All functions below runs once when we start the game
 fn spawn_players(mut commands: Commands) {
     commands.spawn((
         Player { handle: 0 },
@@ -145,103 +144,7 @@ fn spawn_players(mut commands: Commands) {
     .add_rollback();
 }
 
-fn start_matchbox_socket(mut commands: Commands) {
-    let room_url = "ws://127.0.0.1:3536/web_shooter?next=2";
-    info!("Connecting to matchbox server: {room_url}");
-    commands.insert_resource(MatchboxSocket::new_ggrs(room_url));
-}
-
-//Rollbackable game functions
-fn move_player(inputs: Res<PlayerInputs<GgrsConfig>>, mut players: Query<(&mut Transform, &mut MoveDir, &Player)>) {
-    
-    for (mut transform, mut move_dir, player) in &mut players {
-
-        let mut direction = Vec2::ZERO;
-        
-        let (input, _) = inputs[player.handle];
-        
-        if input & INPUT_UP != 0 {
-            direction.y += 1.0;
-        }
-        if input & INPUT_DOWN != 0 {
-            direction.y -= 1.0;
-        }
-        if input & INPUT_RIGHT != 0 {
-            direction.x += 1.0;
-        }
-        if input & INPUT_LEFT != 0 {
-            direction.x -= 1.0;
-        }
-
-        if direction == Vec2::ZERO {
-            continue;
-        }
-
-        direction = direction.normalize_or_zero();
-
-        move_dir.0 = direction;
-
-        let move_delta = (direction * MOVE_SPEED).extend(0.0);
-        transform.translation += move_delta;
-    }
-}
-
-fn reload_bullet(inputs: Res<PlayerInputs<GgrsConfig>>, mut bullets: Query<(&mut BulletReady, &Player)>) {
-    for (mut can_fire, player) in &mut bullets {
-        let (input, _) = inputs[player.handle];
-        if input & INPUT_FIRE == 0 {
-            can_fire.0 = true;
-        }
-    }
-}
-
-fn fire_bullets(mut commands: Commands, inputs: Res<PlayerInputs<GgrsConfig>>, images: Res<ImageAssets>, mut players: Query<(&Transform, &Player, &mut BulletReady, &MoveDir)>) {
-    for (transform, player, mut bullet_ready, move_dir) in &mut players {
-        let (input, _) = inputs[player.handle];
-        if input & INPUT_FIRE != 0 && bullet_ready.0 {
-            let player_pos = transform.translation.xy();
-            let pos = player_pos + move_dir.0 * PLAYER_RADIUS + BULLET_RADIUS;
-            commands.spawn((
-                Bullet,
-                *move_dir,
-                SpriteBundle {
-                transform: Transform::from_translation(pos.extend(20.0)).with_rotation(Quat::from_rotation_arc_2d(Vec2::X, move_dir.0)),
-                texture: images.bullet.clone(),
-                sprite: Sprite {
-                    custom_size: Some(Vec2::new(0.3, 0.1)),
-                    ..default()
-                },
-                ..default()
-            }))
-            .add_rollback();
-            bullet_ready.0 = false;
-        }
-    }
-}
-
-fn move_bullet(mut bullets: Query<(&mut Transform, &MoveDir), With<Bullet>>) {
-    for (mut transform, dir) in &mut bullets {
-        let delta = (dir.0 * 0.35).extend(0.0);
-        transform.translation += delta;
-    }
-}
-
-fn kill_players(mut commands: Commands, players: Query<(Entity, &Transform), (With<Player>, Without<Bullet>)>, bullets: Query<&Transform, With<Bullet>>) {
-    for (player, player_transform) in &players {
-        for bullet_transform in &bullets {
-            let distance = Vec2::distance(
-                player_transform.translation.xy(),
-                bullet_transform.translation.xy()
-            );
-            if distance < PLAYER_RADIUS + BULLET_RADIUS {
-                commands.entity(player).despawn_recursive();
-            }
-        }
-    }
-}
-
-//End of rollback functions
-
+//All functions below run ever frame while we are match making
 fn wait_for_players(mut commands: Commands, mut socket: ResMut<MatchboxSocket<SingleChannel>>, mut next_state: ResMut<NextState<GameState>>) {
     if socket.get_channel(0).is_err() {
         return;
@@ -280,6 +183,7 @@ fn wait_for_players(mut commands: Commands, mut socket: ResMut<MatchboxSocket<Si
     next_state.set(GameState::InGame);
 }
 
+//All functions below run every frame when we are playing
 fn camera_follow(
     player_handle: Option<Res<LocalPlayerHandle>>,
     players: Query<(&Player, &Transform)>,
@@ -302,4 +206,18 @@ fn camera_follow(
             transform.translation.y = pos.y;
         }
     }
+}
+
+fn update_score_ui(mut context: EguiContexts, scores: Res<Scores>, rollback_state: ResMut<RollbackState>) {
+    let Scores(p1_score, p2_score) = *scores;
+
+    let current_state = *rollback_state;
+
+    egui::Area::new("Score").anchor(Align2::CENTER_TOP, (0.0, 25.0))
+        .show(context.ctx_mut(), |ui| {
+            ui.label(RichText::new(format!("{p1_score} - {p2_score} {current_state:?}"))
+                .color(Color32::BLACK)
+                .font(FontId::proportional(72.0)),
+            );
+        });
 }

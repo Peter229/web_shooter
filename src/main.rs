@@ -17,7 +17,6 @@ mod resources;
 //Recompile with cargo run --release --target wasm32-unknown-unknown
 //Testing url http://127.0.0.1:1334
 
-const MAP_SIZE: u32 = 41;
 const GRID_WIDTH: f32 = 0.05;
 
 #[derive(States, Clone, Eq, PartialEq, Debug, Hash, Default)]
@@ -47,6 +46,8 @@ fn main() {
         .register_rollback_component::<Transform>()
         .register_rollback_component::<BulletReady>()
         .register_rollback_component::<MoveDir>()
+        .register_rollback_component::<Health>()
+        .register_rollback_component::<PlayerTimer>()
         .register_rollback_resource::<Scores>()
         .register_rollback_resource::<RollbackState>(),
     )
@@ -57,7 +58,7 @@ fn main() {
     .add_systems(OnEnter(GameState::InGame), spawn_players)
     .add_systems(Update,  (wait_for_players.run_if(in_state(GameState::Matchmaking)), 
         (camera_follow, update_score_ui).run_if(in_state(GameState::InGame)),),)
-    .add_systems(GgrsSchedule, (move_player, reload_bullet, fire_bullets, move_bullet, kill_players).chain())
+    .add_systems(GgrsSchedule, (respawn_players, move_player, reload_bullet, fire_bullets, move_bullet, kill_players).chain())
     .run();
 }
 
@@ -115,6 +116,8 @@ fn spawn_players(mut commands: Commands) {
         Player { handle: 0 },
         BulletReady(true),
         MoveDir(-Vec2::X),
+        Health(100),
+        PlayerTimer(1.0),
         SpriteBundle {
             transform: Transform::from_translation(Vec3::new(-2.0, 0.0, 10.0)),
             sprite: Sprite {
@@ -131,6 +134,8 @@ fn spawn_players(mut commands: Commands) {
         Player { handle: 1 },
         BulletReady(true),
         MoveDir(Vec2::X),
+        Health(100),
+        PlayerTimer(1.0),
         SpriteBundle {
             transform: Transform::from_translation(Vec3::new(2.0, 0.0, 10.0)),
             sprite: Sprite {

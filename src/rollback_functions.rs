@@ -17,11 +17,33 @@ impl ggrs::Config for GgrsConfig {
 const MOVE_SPEED: f32 = 0.13;
 const PLAYER_RADIUS: f32 = 0.5;
 const BULLET_RADIUS: f32 = 0.025;
+pub const MAP_SIZE: u32 = 41;
 
-//Rollbackable game functions
-pub fn move_player(inputs: Res<PlayerInputs<GgrsConfig>>, mut players: Query<(&mut Transform, &mut MoveDir, &Player)>) {
-    
-    for (mut transform, mut move_dir, player) in &mut players {
+//Rollbackable functions
+pub fn respawn_players(mut players: Query<(&mut Transform, &mut Health, &mut PlayerTimer)>) {
+
+    for (mut transform, mut health, mut player_timer) in &mut players {
+
+        if health.0 <= 0 {
+
+            player_timer.0 -= 0.016;
+            if player_timer.0 <= 0.0 {
+                player_timer.0 = 1.0;
+                health.0 = 100;
+                transform.translation.x = 0.0;
+                transform.translation.y = 0.0;
+            }
+        }
+    }
+}
+
+pub fn move_player(inputs: Res<PlayerInputs<GgrsConfig>>, mut players: Query<(&mut Transform, &mut MoveDir, &Health, &Player)>) {
+
+    for (mut transform, mut move_dir, health, player) in &mut players {
+
+        if health.0 <= 0 {
+            continue;
+        }
 
         let mut direction = Vec2::ZERO;
         
@@ -48,8 +70,12 @@ pub fn move_player(inputs: Res<PlayerInputs<GgrsConfig>>, mut players: Query<(&m
 
         move_dir.0 = direction;
 
-        let move_delta = (direction * MOVE_SPEED).extend(0.0);
-        transform.translation += move_delta;
+        let move_delta = direction * MOVE_SPEED;
+        let limit = Vec2::splat(MAP_SIZE as f32  / 2.0 - 0.5);
+        let old_pos = transform.translation.xy();
+        let new_pos = (old_pos + move_delta).clamp(-limit, limit);
+        transform.translation.x = new_pos.x;
+        transform.translation.y = new_pos.y;
     }
 }
 
@@ -86,22 +112,31 @@ pub fn fire_bullets(mut commands: Commands, inputs: Res<PlayerInputs<GgrsConfig>
     }
 }
 
-pub fn move_bullet(mut bullets: Query<(&mut Transform, &MoveDir), With<Bullet>>) {
-    for (mut transform, dir) in &mut bullets {
+pub fn move_bullet(mut commands: Commands, mut bullets: Query<(Entity, &mut Transform, &MoveDir), With<Bullet>>) {
+
+    for (bullet_entity, mut transform, dir) in &mut bullets {
         let delta = (dir.0 * 0.35).extend(0.0);
         transform.translation += delta;
+        if transform.translation.x < -(MAP_SIZE as f32) / 2.0 || transform.translation.x > MAP_SIZE as f32 / 2.0 || transform.translation.y < -(MAP_SIZE as f32) / 2.0 || transform.translation.y > MAP_SIZE as f32 / 2.0 {
+            commands.entity(bullet_entity).despawn_recursive();
+        }
     }
 }
 
-pub fn kill_players(mut commands: Commands, players: Query<(Entity, &Transform, &Player), (With<Player>, Without<Bullet>)>, bullets: Query<&Transform, With<Bullet>>, mut scores: ResMut<Scores>, mut rollback_state: ResMut<RollbackState>) {
-    for (player_entity, player_transform, player) in &players {
-        for bullet_transform in &bullets {
+pub fn kill_players(mut commands: Commands, mut players: Query<(&Transform, &mut Health, &Player), (With<Player>, Without<Bullet>)>, bullets: Query<(Entity, &Transform), With<Bullet>>, mut scores: ResMut<Scores>, mut rollback_state: ResMut<RollbackState>) {
+    for (player_transform, mut health, player) in &mut players {
+
+        if health.0 <= 0 {
+            continue;
+        }
+
+        for (bullet_entity, bullet_transform) in &bullets {
             let distance = Vec2::distance(
                 player_transform.translation.xy(),
                 bullet_transform.translation.xy()
             );
             if distance < PLAYER_RADIUS + BULLET_RADIUS {
-                commands.entity(player_entity).despawn_recursive();
+                commands.entity(bullet_entity).despawn_recursive();
                 
                 if player.handle == 0 {
                     scores.1 += 1;
@@ -109,6 +144,7 @@ pub fn kill_players(mut commands: Commands, players: Query<(Entity, &Transform, 
                 else {
                     scores.0 += 1;
                 }
+                health.0 -= 200;
                 *rollback_state = RollbackState::Respawn;
                 info!("Player Died: {scores:?}")
             }

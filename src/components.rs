@@ -13,3 +13,9 @@ pub struct Bullet;
 
 #[derive(Component, Reflect, Default, Clone, Copy)]
 pub struct MoveDir(pub Vec2);
+
+#[derive(Component, Reflect, Default)]
+pub struct Health(pub i32);
+
+#[derive(Component, Reflect, Default)]
+pub struct PlayerTimer(pub f32);

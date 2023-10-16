@@ -23,7 +23,7 @@ pub fn input(_: In<PlayerHandle>, keys: Res<Input<KeyCode>>) -> u8 {
     if keys.any_pressed([KeyCode::Left, KeyCode::A]) {
         input |= INPUT_LEFT;
     }
-    if keys.any_pressed([KeyCode::C, KeyCode::K]) {
+    if keys.any_pressed([KeyCode::Return, KeyCode::K]) {
         input |= INPUT_FIRE;
     }
 

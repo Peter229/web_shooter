@@ -17,6 +17,12 @@ pub enum RollbackState {
 pub struct ImageAssets {
     #[asset(path = "bullet.png")]
     pub bullet: Handle<Image>,
+    #[asset(path = "player1.png")]
+    pub player1: Handle<Image>,
+    #[asset(path = "player2.png")]
+    pub player2: Handle<Image>,
+    #[asset(path = "remains.png")]
+    pub remains: Handle<Image>,
 }
 
 #[derive(Resource)]

@@ -20,9 +20,9 @@ const BULLET_RADIUS: f32 = 0.025;
 pub const MAP_SIZE: u32 = 41;
 
 //Rollbackable functions
-pub fn respawn_players(mut players: Query<(&mut Transform, &mut Health, &mut PlayerTimer)>) {
+pub fn respawn_players(mut players: Query<(&mut Transform, &mut Health, &mut PlayerTimer, &mut Handle<Image>, &Player)>, images: Res<ImageAssets>) {
 
-    for (mut transform, mut health, mut player_timer) in &mut players {
+    for (mut transform, mut health, mut player_timer, mut sprite, player) in &mut players {
 
         if health.0 <= 0 {
 
@@ -32,6 +32,12 @@ pub fn respawn_players(mut players: Query<(&mut Transform, &mut Health, &mut Pla
                 health.0 = 100;
                 transform.translation.x = 0.0;
                 transform.translation.y = 0.0;
+                if player.handle == 0 {
+                    *sprite = images.player1.clone();
+                }
+                else {
+                    *sprite = images.player2.clone();
+                }
             }
         }
     }
@@ -76,6 +82,13 @@ pub fn move_player(inputs: Res<PlayerInputs<GgrsConfig>>, mut players: Query<(&m
         let new_pos = (old_pos + move_delta).clamp(-limit, limit);
         transform.translation.x = new_pos.x;
         transform.translation.y = new_pos.y;
+
+        if direction.x > 0.0 {
+            transform.rotation = Quat::default();
+        }
+        else if direction.x < 0.0 {
+            transform.rotation = Quat::from_rotation_y(std::f32::consts::PI);
+        }
     }
 }
 
@@ -123,8 +136,8 @@ pub fn move_bullet(mut commands: Commands, mut bullets: Query<(Entity, &mut Tran
     }
 }
 
-pub fn kill_players(mut commands: Commands, mut players: Query<(&Transform, &mut Health, &Player), (With<Player>, Without<Bullet>)>, bullets: Query<(Entity, &Transform), With<Bullet>>, mut scores: ResMut<Scores>, mut rollback_state: ResMut<RollbackState>) {
-    for (player_transform, mut health, player) in &mut players {
+pub fn kill_players(mut commands: Commands, mut players: Query<(&Transform, &mut Health, &Player, &mut Handle<Image>), (With<Player>, Without<Bullet>)>, bullets: Query<(Entity, &Transform), With<Bullet>>, mut scores: ResMut<Scores>, mut rollback_state: ResMut<RollbackState>, sprites: Res<ImageAssets>) {
+    for (player_transform, mut health, player, mut sprite) in &mut players {
 
         if health.0 <= 0 {
             continue;
@@ -145,6 +158,7 @@ pub fn kill_players(mut commands: Commands, mut players: Query<(&Transform, &mut
                     scores.0 += 1;
                 }
                 health.0 -= 200;
+                *sprite = sprites.remains.clone();
                 *rollback_state = RollbackState::Respawn;
                 info!("Player Died: {scores:?}")
             }

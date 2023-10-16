@@ -38,7 +38,8 @@ fn main() {
             ..default()
         }),
         ..default()
-        }),
+        })
+        .set(ImagePlugin::default_nearest()),
         EguiPlugin,
     ))
     .add_ggrs_plugin(GgrsPlugin::<GgrsConfig>::new()
@@ -111,7 +112,7 @@ fn start_matchbox_socket(mut commands: Commands) {
 }
 
 //All functions below runs once when we start the game
-fn spawn_players(mut commands: Commands) {
+fn spawn_players(mut commands: Commands, images: Res<ImageAssets>) {
     commands.spawn((
         Player { handle: 0 },
         BulletReady(true),
@@ -120,8 +121,8 @@ fn spawn_players(mut commands: Commands) {
         PlayerTimer(1.0),
         SpriteBundle {
             transform: Transform::from_translation(Vec3::new(-2.0, 0.0, 10.0)),
+            texture: images.player1.clone(),
             sprite: Sprite {
-                color: Color::rgb(0.0, 0.47, 1.0),
                 custom_size: Some(Vec2::new(1.0, 1.0)),
                 ..default()
             },
@@ -138,8 +139,8 @@ fn spawn_players(mut commands: Commands) {
         PlayerTimer(1.0),
         SpriteBundle {
             transform: Transform::from_translation(Vec3::new(2.0, 0.0, 10.0)),
+            texture: images.player2.clone(),
             sprite: Sprite {
-                color: Color::rgb(0.0, 0.4, 0.0),
                 custom_size: Some(Vec2::new(1.0, 1.0)),
                 ..default()
             },

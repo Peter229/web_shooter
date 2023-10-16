@@ -1,4 +1,4 @@
-use bevy::{prelude::*, render::camera::ScalingMode};
+use bevy::{prelude::*, render::camera::ScalingMode, window::PrimaryWindow};
 use bevy_ggrs::{ggrs::PlayerType, *};
 use bevy_matchbox::prelude::*;
 use bevy_asset_loader::prelude::*;
@@ -67,10 +67,23 @@ fn main() {
 //Web does not allow for parallel execution so .chain() is fine
 
 //All functions below runs once when we start matching making
-fn setup(mut commands: Commands) {
+fn setup(mut commands: Commands, images: Res<ImageAssets>) {
     let mut camera_bundle = Camera2dBundle::default();
     camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.0);
     commands.spawn(camera_bundle);
+
+    commands.spawn((
+        Crosshair,
+        SpriteBundle {
+            transform: Transform::from_translation(Vec3::new(-2.0, 0.0, 100.0)),
+            texture: images.crosshair.clone(),
+            sprite: Sprite {
+                custom_size: Some(Vec2::new(0.4, 0.4)),
+                ..default()
+            },
+            ..default()
+        }
+    ));
 
     for i in 0..=MAP_SIZE {
         //Horizontal line
@@ -193,8 +206,11 @@ fn wait_for_players(mut commands: Commands, mut socket: ResMut<MatchboxSocket<Si
 fn camera_follow(
     player_handle: Option<Res<LocalPlayerHandle>>,
     players: Query<(&Player, &Transform)>,
-    mut cameras: Query<&mut Transform, (With<Camera>, Without<Player>)>,
+    mut cameras: Query<(&Camera, &mut Transform, &GlobalTransform), (With<Camera>, Without<Player>)>,
+    q_windows: Query<&Window, With<PrimaryWindow>>,
+    mut crosshair: Query<&mut Transform, (With<Crosshair>, Without<Camera>, Without<Player>)>,
 ) {
+    
     let player_handle = match player_handle {
         Some(handle) => handle.0,
         None => return,
@@ -207,9 +223,16 @@ fn camera_follow(
 
         let pos = player_transform.translation;
 
-        for mut transform in &mut cameras {
+        for (camera, mut transform, global_transform) in &mut cameras {
             transform.translation.x = pos.x;
             transform.translation.y = pos.y;
+
+            if let Some(position) = q_windows.single().cursor_position().and_then(|cursor| camera.viewport_to_world(global_transform, cursor)).map(|ray| ray.origin.truncate()) {
+                for mut crosshair_transform in &mut crosshair {
+                    crosshair_transform.translation.x = position.x;
+                    crosshair_transform.translation.y = position.y;
+                }
+            }
         }
     }
 }

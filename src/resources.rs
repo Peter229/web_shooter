@@ -23,6 +23,8 @@ pub struct ImageAssets {
     pub player2: Handle<Image>,
     #[asset(path = "remains.png")]
     pub remains: Handle<Image>,
+    #[asset(path = "crosshair.png")]
+    pub crosshair: Handle<Image>,
 }
 
 #[derive(Resource)]

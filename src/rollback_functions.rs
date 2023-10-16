@@ -9,7 +9,7 @@ use crate::resources::*;
 pub struct GgrsConfig;
 
 impl ggrs::Config for GgrsConfig {
-    type Input = u8;
+    type Input = u16;
     type State = u8;
     type Address = PeerId;
 }
@@ -19,7 +19,7 @@ const PLAYER_RADIUS: f32 = 0.5;
 const BULLET_RADIUS: f32 = 0.025;
 pub const MAP_SIZE: u32 = 41;
 
-//Rollbackable functions
+//Rollbackable functions, needs to be determistic, all functions will run downwards in that order
 pub fn respawn_players(mut players: Query<(&mut Transform, &mut Health, &mut PlayerTimer, &mut Handle<Image>, &Player)>, images: Res<ImageAssets>) {
 
     for (mut transform, mut health, mut player_timer, mut sprite, player) in &mut players {
@@ -101,17 +101,21 @@ pub fn reload_bullet(inputs: Res<PlayerInputs<GgrsConfig>>, mut bullets: Query<(
     }
 }
 
-pub fn fire_bullets(mut commands: Commands, inputs: Res<PlayerInputs<GgrsConfig>>, images: Res<ImageAssets>, mut players: Query<(&Transform, &Player, &mut BulletReady, &MoveDir)>) {
-    for (transform, player, mut bullet_ready, move_dir) in &mut players {
+pub fn fire_bullets(mut commands: Commands, inputs: Res<PlayerInputs<GgrsConfig>>, images: Res<ImageAssets>, mut players: Query<(&Transform, &Player, &mut BulletReady)>) {
+    for (transform, player, mut bullet_ready) in &mut players {
         let (input, _) = inputs[player.handle];
         if input & INPUT_FIRE != 0 && bullet_ready.0 {
             let player_pos = transform.translation.xy();
-            let pos = player_pos + move_dir.0 * PLAYER_RADIUS + BULLET_RADIUS;
+            let network_angle = (input & INPUT_ANGLE) >> 8;
+            let decoded_angle = ((network_angle as f32 / u8::MAX as f32) * (2.0 * std::f32::consts::PI)) - std::f32::consts::PI;
+            let angle = Quat::from_rotation_z(decoded_angle);
+            let shoot_direction = Vec2::new(decoded_angle.cos(), decoded_angle.sin());
+            let pos = player_pos + shoot_direction * PLAYER_RADIUS + BULLET_RADIUS;
             commands.spawn((
                 Bullet,
-                *move_dir,
+                MoveDir(shoot_direction),
                 SpriteBundle {
-                transform: Transform::from_translation(pos.extend(20.0)).with_rotation(Quat::from_rotation_arc_2d(Vec2::X, move_dir.0)),
+                transform: Transform::from_translation(pos.extend(20.0)).with_rotation(angle/*Quat::from_rotation_arc_2d(Vec2::X, mouse_move_dir)*/),
                 texture: images.bullet.clone(),
                 sprite: Sprite {
                     custom_size: Some(Vec2::new(0.3, 0.1)),

@@ -1,14 +1,37 @@
-use bevy::{prelude::*, render::camera::ScalingMode};
+use bevy::{prelude::*, render::camera::ScalingMode, math::Vec3Swizzles};
 use bevy_ggrs::{ggrs::PlayerType, *};
 use bevy_matchbox::prelude::*;
 use bevy_matchbox::matchbox_socket::PeerId;
+use bevy_asset_loader::prelude::*;
 use input::*;
 use components::*;
 
 mod input;
 mod components;
 
+//Use matchbox_server in cmd window then keep open while working. Just keeps server up
+//Recompile with cargo run --release --target wasm32-unknown-unknown
+//Testing url http://127.0.0.1:1334
+
 const MOVE_SPEED: f32 = 0.13;
+const MAP_SIZE: u32 = 41;
+const GRID_WIDTH: f32 = 0.05;
+const PLAYER_RADIUS: f32 = 0.5;
+const BULLET_RADIUS: f32 = 0.025;
+
+#[derive(States, Clone, Eq, PartialEq, Debug, Hash, Default)]
+enum GameState{
+    #[default]
+    AssetLoading,
+    Matchmaking,
+    InGame,
+}
+
+#[derive(AssetCollection, Resource)]
+struct ImageAssets {
+    #[asset(path = "bullet.png")]
+    bullet: Handle<Image>,
+}
 
 #[derive(Resource)]
 struct LocalPlayerHandle(usize);
@@ -22,7 +45,10 @@ impl ggrs::Config for GgrsConfig {
 }
 
 fn main() {
-    App::new().add_plugins(DefaultPlugins.set(WindowPlugin {
+    App::new().add_state::<GameState>()
+    .add_loading_state(LoadingState::new(GameState::AssetLoading).continue_to_state(GameState::Matchmaking))
+    .add_collection_to_loading_state::<_, ImageAssets>(GameState::AssetLoading)
+    .add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             fit_canvas_to_parent: true,
             prevent_default_event_handling: false,
@@ -32,25 +58,66 @@ fn main() {
     }))
     .add_ggrs_plugin(GgrsPlugin::<GgrsConfig>::new()
         .with_input_system(input)
-        .register_rollback_component::<Transform>(),)
+        .register_rollback_component::<Transform>()
+        .register_rollback_component::<BulletReady>()
+        .register_rollback_component::<MoveDir>(),
+    )
     .insert_resource(ClearColor(Color::rgb(0.53, 0.53, 0.53)))
-    .add_systems(Startup, (setup, spawn_players, start_matchbox_socket))
-    .add_systems(Update,  (wait_for_players, camera_follow))
-    .add_systems(GgrsSchedule, move_player)
+    .add_systems(OnEnter(GameState::Matchmaking), (setup, start_matchbox_socket))
+    .add_systems(OnEnter(GameState::InGame), spawn_players)
+    .add_systems(Update,  (wait_for_players.run_if(in_state(GameState::Matchmaking)), camera_follow.run_if(in_state(GameState::InGame)),),)
+    .add_systems(GgrsSchedule, (move_player, reload_bullet, fire_bullets, move_bullet, kill_players).chain())
     .run();
 }
+
+//Using .chain() forces one to run after another, using .after() allows for parallel exucation as long as the same components are not effected in each function
+//Web does not allow for parallel execution so .chain() is fine
 
 fn setup(mut commands: Commands) {
     let mut camera_bundle = Camera2dBundle::default();
     camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.0);
     commands.spawn(camera_bundle);
+
+    for i in 0..=MAP_SIZE {
+        //Horizontal line
+        commands.spawn(SpriteBundle {
+            transform: Transform::from_translation(Vec3::new(
+                0.0, 
+                i as f32 - MAP_SIZE as f32 / 2.0,
+                0.0,
+            )),
+            sprite: Sprite {
+                color: Color::rgb(0.27, 0.27, 0.27),
+                custom_size: Some(Vec2::new(MAP_SIZE as f32, GRID_WIDTH)),
+                ..default()
+            },
+            ..default()
+        });
+
+        //Vertical line
+        commands.spawn(SpriteBundle {
+            transform: Transform::from_translation(Vec3::new(
+                i as f32 - MAP_SIZE as f32 / 2.0,
+                0.0, 
+                0.0,
+            )),
+            sprite: Sprite {
+                color: Color::rgb(0.27, 0.27, 0.27),
+                custom_size: Some(Vec2::new(GRID_WIDTH, MAP_SIZE as f32)),
+                ..default()
+            },
+            ..default()
+        });
+    }
 }
 
 fn spawn_players(mut commands: Commands) {
     commands.spawn((
         Player { handle: 0 },
+        BulletReady(true),
+        MoveDir(-Vec2::X),
         SpriteBundle {
-            transform: Transform::from_translation(Vec3::new(-2.0, 0.0, 0.0)),
+            transform: Transform::from_translation(Vec3::new(-2.0, 0.0, 10.0)),
             sprite: Sprite {
                 color: Color::rgb(0.0, 0.47, 1.0),
                 custom_size: Some(Vec2::new(1.0, 1.0)),
@@ -63,8 +130,10 @@ fn spawn_players(mut commands: Commands) {
 
     commands.spawn((
         Player { handle: 1 },
+        BulletReady(true),
+        MoveDir(Vec2::X),
         SpriteBundle {
-            transform: Transform::from_translation(Vec3::new(2.0, 0.0, 0.0)),
+            transform: Transform::from_translation(Vec3::new(2.0, 0.0, 10.0)),
             sprite: Sprite {
                 color: Color::rgb(0.0, 0.4, 0.0),
                 custom_size: Some(Vec2::new(1.0, 1.0)),
@@ -82,9 +151,10 @@ fn start_matchbox_socket(mut commands: Commands) {
     commands.insert_resource(MatchboxSocket::new_ggrs(room_url));
 }
 
-fn move_player(inputs: Res<PlayerInputs<GgrsConfig>>, mut players: Query<(&mut Transform, &Player)>) {
+//Rollbackable game functions
+fn move_player(inputs: Res<PlayerInputs<GgrsConfig>>, mut players: Query<(&mut Transform, &mut MoveDir, &Player)>) {
     
-    for (mut transform, player) in &mut players {
+    for (mut transform, mut move_dir, player) in &mut players {
 
         let mut direction = Vec2::ZERO;
         
@@ -103,12 +173,76 @@ fn move_player(inputs: Res<PlayerInputs<GgrsConfig>>, mut players: Query<(&mut T
             direction.x -= 1.0;
         }
 
+        if direction == Vec2::ZERO {
+            continue;
+        }
+
+        direction = direction.normalize_or_zero();
+
+        move_dir.0 = direction;
+
         let move_delta = (direction * MOVE_SPEED).extend(0.0);
         transform.translation += move_delta;
     }
 }
 
-fn wait_for_players(mut commands: Commands, mut socket: ResMut<MatchboxSocket<SingleChannel>>) {
+fn reload_bullet(inputs: Res<PlayerInputs<GgrsConfig>>, mut bullets: Query<(&mut BulletReady, &Player)>) {
+    for (mut can_fire, player) in &mut bullets {
+        let (input, _) = inputs[player.handle];
+        if input & INPUT_FIRE == 0 {
+            can_fire.0 = true;
+        }
+    }
+}
+
+fn fire_bullets(mut commands: Commands, inputs: Res<PlayerInputs<GgrsConfig>>, images: Res<ImageAssets>, mut players: Query<(&Transform, &Player, &mut BulletReady, &MoveDir)>) {
+    for (transform, player, mut bullet_ready, move_dir) in &mut players {
+        let (input, _) = inputs[player.handle];
+        if input & INPUT_FIRE != 0 && bullet_ready.0 {
+            let player_pos = transform.translation.xy();
+            let pos = player_pos + move_dir.0 * PLAYER_RADIUS + BULLET_RADIUS;
+            commands.spawn((
+                Bullet,
+                *move_dir,
+                SpriteBundle {
+                transform: Transform::from_translation(pos.extend(20.0)).with_rotation(Quat::from_rotation_arc_2d(Vec2::X, move_dir.0)),
+                texture: images.bullet.clone(),
+                sprite: Sprite {
+                    custom_size: Some(Vec2::new(0.3, 0.1)),
+                    ..default()
+                },
+                ..default()
+            }))
+            .add_rollback();
+            bullet_ready.0 = false;
+        }
+    }
+}
+
+fn move_bullet(mut bullets: Query<(&mut Transform, &MoveDir), With<Bullet>>) {
+    for (mut transform, dir) in &mut bullets {
+        let delta = (dir.0 * 0.35).extend(0.0);
+        transform.translation += delta;
+    }
+}
+
+fn kill_players(mut commands: Commands, players: Query<(Entity, &Transform), (With<Player>, Without<Bullet>)>, bullets: Query<&Transform, With<Bullet>>) {
+    for (player, player_transform) in &players {
+        for bullet_transform in &bullets {
+            let distance = Vec2::distance(
+                player_transform.translation.xy(),
+                bullet_transform.translation.xy()
+            );
+            if distance < PLAYER_RADIUS + BULLET_RADIUS {
+                commands.entity(player).despawn_recursive();
+            }
+        }
+    }
+}
+
+//End of rollback functions
+
+fn wait_for_players(mut commands: Commands, mut socket: ResMut<MatchboxSocket<SingleChannel>>, mut next_state: ResMut<NextState<GameState>>) {
     if socket.get_channel(0).is_err() {
         return;
     }
@@ -142,6 +276,8 @@ fn wait_for_players(mut commands: Commands, mut socket: ResMut<MatchboxSocket<Si
         .expect("Failed to start session");
 
     commands.insert_resource(bevy_ggrs::Session::P2P(ggrs_session));
+
+    next_state.set(GameState::InGame);
 }
 
 fn camera_follow(

@@ -18,6 +18,8 @@ const MOVE_SPEED: f32 = 0.13;
 const PLAYER_RADIUS: f32 = 0.5;
 const BULLET_RADIUS: f32 = 0.025;
 pub const MAP_SIZE: u32 = 41;
+pub const FIRE_RATE: f32 = 0.1;
+pub const DELTA_TIME: f32 = 0.016;
 
 //Rollbackable functions, needs to be determistic, all functions will run downwards in that order
 pub fn respawn_players(mut players: Query<(&mut Transform, &mut Health, &mut PlayerTimer, &mut Handle<Image>, &Player)>, images: Res<ImageAssets>) {
@@ -26,7 +28,7 @@ pub fn respawn_players(mut players: Query<(&mut Transform, &mut Health, &mut Pla
 
         if health.0 <= 0 {
 
-            player_timer.0 -= 0.016;
+            player_timer.0 -= DELTA_TIME;
             if player_timer.0 <= 0.0 {
                 player_timer.0 = 1.0;
                 health.0 = 100;
@@ -82,21 +84,16 @@ pub fn move_player(inputs: Res<PlayerInputs<GgrsConfig>>, mut players: Query<(&m
         let new_pos = (old_pos + move_delta).clamp(-limit, limit);
         transform.translation.x = new_pos.x;
         transform.translation.y = new_pos.y;
-
-        if direction.x > 0.0 {
-            transform.rotation = Quat::default();
-        }
-        else if direction.x < 0.0 {
-            transform.rotation = Quat::from_rotation_y(std::f32::consts::PI);
-        }
     }
 }
 
-pub fn reload_bullet(inputs: Res<PlayerInputs<GgrsConfig>>, mut bullets: Query<(&mut BulletReady, &Player)>) {
-    for (mut can_fire, player) in &mut bullets {
-        let (input, _) = inputs[player.handle];
-        if input & INPUT_FIRE == 0 {
-            can_fire.0 = true;
+pub fn reload_bullet(mut bullets: Query<&mut BulletReady>) {
+    for mut can_fire in &mut bullets {
+        if !can_fire.0 {
+            can_fire.1 -= DELTA_TIME;
+            if can_fire.1 <= 0.0 {
+                can_fire.0 = true;
+            }
         }
     }
 }
@@ -115,7 +112,7 @@ pub fn fire_bullets(mut commands: Commands, inputs: Res<PlayerInputs<GgrsConfig>
                 Bullet,
                 MoveDir(shoot_direction),
                 SpriteBundle {
-                transform: Transform::from_translation(pos.extend(20.0)).with_rotation(angle/*Quat::from_rotation_arc_2d(Vec2::X, mouse_move_dir)*/),
+                transform: Transform::from_translation(pos.extend(20.0)).with_rotation(angle),
                 texture: images.bullet.clone(),
                 sprite: Sprite {
                     custom_size: Some(Vec2::new(0.3, 0.1)),
@@ -125,6 +122,7 @@ pub fn fire_bullets(mut commands: Commands, inputs: Res<PlayerInputs<GgrsConfig>
             }))
             .add_rollback();
             bullet_ready.0 = false;
+            bullet_ready.1 = FIRE_RATE;
         }
     }
 }
@@ -166,6 +164,29 @@ pub fn kill_players(mut commands: Commands, mut players: Query<(&Transform, &mut
                 *rollback_state = RollbackState::Respawn;
                 info!("Player Died: {scores:?}")
             }
+        }
+    }
+}
+
+pub fn update_sprites(inputs: Res<PlayerInputs<GgrsConfig>>, mut players: Query<(&mut Transform, &Health, &Player)>) {
+
+    for (mut transform, health, player) in &mut players {
+
+        if health.0 <= 0 {
+            continue;
+        }
+
+        let (input, _) = inputs[player.handle];
+
+        let network_angle = (input & INPUT_ANGLE) >> 8;
+        let decoded_angle = ((network_angle as f32 / u8::MAX as f32) * (2.0 * std::f32::consts::PI)) - std::f32::consts::PI;
+        let shoot_direction = Vec2::new(decoded_angle.cos(), decoded_angle.sin());
+
+        if shoot_direction.x > 0.0 {
+            transform.rotation = Quat::default();
+        }
+        else if shoot_direction.x < 0.0 {
+            transform.rotation = Quat::from_rotation_y(std::f32::consts::PI);
         }
     }
 }

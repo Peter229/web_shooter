@@ -59,7 +59,7 @@ fn main() {
     .add_systems(OnEnter(GameState::InGame), spawn_players)
     .add_systems(Update,  (wait_for_players.run_if(in_state(GameState::Matchmaking)), 
         (camera_follow, update_score_ui).run_if(in_state(GameState::InGame)),),)
-    .add_systems(GgrsSchedule, (respawn_players, move_player, reload_bullet, fire_bullets, move_bullet, kill_players).chain())
+    .add_systems(GgrsSchedule, (respawn_players, move_player, reload_bullet, fire_bullets, move_bullet, kill_players, update_sprites).chain())
     .run();
 }
 
@@ -128,7 +128,7 @@ fn start_matchbox_socket(mut commands: Commands) {
 fn spawn_players(mut commands: Commands, images: Res<ImageAssets>) {
     commands.spawn((
         Player { handle: 0 },
-        BulletReady(true),
+        BulletReady(true, FIRE_RATE),
         MoveDir(-Vec2::X),
         Health(100),
         PlayerTimer(1.0),
@@ -146,7 +146,7 @@ fn spawn_players(mut commands: Commands, images: Res<ImageAssets>) {
 
     commands.spawn((
         Player { handle: 1 },
-        BulletReady(true),
+        BulletReady(true, FIRE_RATE),
         MoveDir(Vec2::X),
         Health(100),
         PlayerTimer(1.0),
@@ -237,14 +237,12 @@ fn camera_follow(
     }
 }
 
-fn update_score_ui(mut context: EguiContexts, scores: Res<Scores>, rollback_state: ResMut<RollbackState>) {
+fn update_score_ui(mut context: EguiContexts, scores: Res<Scores>) {
     let Scores(p1_score, p2_score) = *scores;
-
-    let current_state = *rollback_state;
 
     egui::Area::new("Score").anchor(Align2::CENTER_TOP, (0.0, 25.0))
         .show(context.ctx_mut(), |ui| {
-            ui.label(RichText::new(format!("{p1_score} - {p2_score} {current_state:?}"))
+            ui.label(RichText::new(format!("{p1_score} - {p2_score}"))
                 .color(Color32::BLACK)
                 .font(FontId::proportional(72.0)),
             );
